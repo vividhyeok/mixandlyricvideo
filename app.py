@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import shutil
+import re
 from modules.mixer import AudioMixer
 from modules.lyrics import LyricEngine
 from modules.video_engine import VideoEngine
@@ -15,6 +16,13 @@ downloader = MusicDownloader(output_dir="downloads")
 # Session State
 if "queue" not in st.session_state:
     st.session_state.queue = [] # List of {title, url/id, audio_path, lyric_text, start, end}
+
+def infer_lyrics_mode(lyrics_text):
+    if not lyrics_text:
+        return "plain"
+    if re.search(r'\[\d+:\d+(\.\d+)?\]', lyrics_text):
+        return "lrc"
+    return "plain"
 
 # Tabs
 tab_search, tab_config, tab_generate = st.tabs(["1. Search & Queue", "2. Configure Segments", "3. Generate"])
@@ -39,12 +47,14 @@ with tab_search:
             st.success(f"Found {len(genie_results)} results on Genie.")
             for item in genie_results:
                 with st.expander(f"{item['artist']} - {item['title']}"):
+                    missing_lyrics = False
                     if st.button("Add This Track", key=f"add_{item['id']}"):
                         with st.spinner("Downloading Audio & Lyrics..."):
                             # 1. Fetch Lyrics
                             lyrics = downloader.get_genie_lyrics(item['id'])
                             if not lyrics:
-                                lyrics = "[00:00.00] Lyrics not available"
+                                lyrics = ""
+                                missing_lyrics = True
                             
                             # 2. Download from YouTube (using Title Artist)
                             query = f"{item['artist']} - {item['title']}"
@@ -65,11 +75,14 @@ with tab_search:
                                     "title": f"{item['artist']} - {item['title']}",
                                     "audio_path": audio_path,
                                     "lyrics_raw": lyrics,
+                                    "lyrics_mode": infer_lyrics_mode(lyrics),
                                     "duration": dur,
                                     "start": 0.0,
                                     "end": dur
                                 })
                                 st.success(f"Added '{item['title']}' to Queue!")
+                                if missing_lyrics:
+                                    st.warning("No Genie lyrics found. You can paste only the needed segment lines or skip lyrics in the Configure tab.")
                             else:
                                 st.error("Failed to download audio.")
         else:
@@ -99,8 +112,19 @@ with tab_config:
                 if st.button("Remove", key=f"rem_{i}"):
                     indices_to_remove.append(i)
             with c2:
+                st.caption("Tip: You can paste only the lyrics for the selected segment to save time.")
+                mode = st.selectbox(
+                    "Lyrics Mode",
+                    options=["Timed LRC", "Plain text (auto distribute)", "Skip lyrics"],
+                    index=0 if item.get("lyrics_mode") == "lrc" else 1 if item.get("lyrics_mode") == "plain" else 2,
+                    key=f"mode_{i}"
+                )
+                mode_value = "lrc" if mode.startswith("Timed") else "plain" if mode.startswith("Plain") else "skip"
+                st.session_state.queue[i]["lyrics_mode"] = mode_value
                 new_lyrics = st.text_area("Lyrics (LRC or Text)", item['lyrics_raw'], height=150, key=f"lrc_{i}")
                 st.session_state.queue[i]['lyrics_raw'] = new_lyrics
+                if mode_value == "lrc" and new_lyrics and not infer_lyrics_mode(new_lyrics) == "lrc":
+                    st.warning("No timestamps detected. Switch to plain text mode or add [mm:ss.xx] tags.")
 
     if indices_to_remove:
         for idx in sorted(indices_to_remove, reverse=True):
@@ -130,7 +154,7 @@ with tab_generate:
             lrc_list = []
             for item in st.session_state.queue:
                 mixer.add_track(item['audio_path'], item['start'], item['end'])
-                lrc_list.append(item['lyrics_raw'])
+                lrc_list.append({"text": item['lyrics_raw'], "mode": item.get("lyrics_mode", "lrc")})
             
             mixed_audio, mix_log = mixer.process_mix()
             

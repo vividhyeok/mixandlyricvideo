@@ -4,6 +4,11 @@ class LyricEngine:
     def __init__(self):
         pass
 
+    def has_timestamps(self, lrc_text):
+        if not lrc_text:
+            return False
+        return bool(re.search(r'\[\d+:\d+(\.\d+)?\]', lrc_text))
+
     def parse_lrc(self, lrc_text):
         """
         Parses a standard LRC string into a list of dicts:
@@ -27,12 +32,33 @@ class LyricEngine:
         
         return sorted(parsed, key=lambda x: x["time_ms"])
 
+    def parse_plain_lines(self, text):
+        lines = []
+        for line in text.splitlines():
+            clean = line.strip()
+            if clean:
+                lines.append(clean)
+        return lines
+
+    def _auto_distribute_lines(self, lines, source_start, source_end, mix_start, speed):
+        if not lines:
+            return []
+
+        duration = max(source_end - source_start, 1)
+        step = duration / max(len(lines), 1)
+        timeline = []
+        for idx, line in enumerate(lines):
+            t_old = source_start + (idx * step)
+            t_new = (t_old - source_start) / speed + mix_start
+            timeline.append({"time_ms": t_new, "text": line})
+        return timeline
+
     def process_mix_lyrics(self, tracks_lyrics, mix_log):
         """
         Combines lyrics based on the mix process.
         
         Args:
-            tracks_lyrics (list): List of LRC strings corresponding to the tracks.
+            tracks_lyrics (list): List of dicts with {text, mode} or raw LRC strings.
             mix_log (list): The metadata returned by AudioMixer.
             
         Returns:
@@ -43,11 +69,18 @@ class LyricEngine:
         for idx, log_entry in enumerate(mix_log):
             if idx >= len(tracks_lyrics):
                 continue
-                
-            lrc_content = tracks_lyrics[idx]
-            if not lrc_content:
+
+            payload = tracks_lyrics[idx]
+            if isinstance(payload, dict):
+                lrc_content = payload.get("text", "")
+                mode = payload.get("mode", "lrc")
+            else:
+                lrc_content = payload
+                mode = "lrc"
+
+            if mode == "skip":
                 continue
-                
+
             parsed_original = self.parse_lrc(lrc_content)
             
             # Filter and Shift
@@ -56,17 +89,25 @@ class LyricEngine:
             source_end = log_entry["source_end_ms"]
             mix_start = log_entry["mix_start_ms"]
             speed = log_entry["speed_rate"]
-            
-            for line in parsed_original:
-                t_old = line["time_ms"]
-                
-                # Check if this line falls within the selected segment
-                if source_start <= t_old <= source_end:
-                    t_new = (t_old - source_start) / speed + mix_start
-                    final_timeline.append({
-                        "time_ms": t_new,
-                        "text": line["text"]
-                    })
+
+            if mode == "plain" or not parsed_original:
+                plain_lines = self.parse_plain_lines(lrc_content)
+                final_timeline.extend(
+                    self._auto_distribute_lines(
+                        plain_lines, source_start, source_end, mix_start, speed
+                    )
+                )
+            else:
+                for line in parsed_original:
+                    t_old = line["time_ms"]
+
+                    # Check if this line falls within the selected segment
+                    if source_start <= t_old <= source_end:
+                        t_new = (t_old - source_start) / speed + mix_start
+                        final_timeline.append({
+                            "time_ms": t_new,
+                            "text": line["text"]
+                        })
         
         # Sort by final timeline
         return sorted(final_timeline, key=lambda x: x["time_ms"])
