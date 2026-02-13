@@ -2,6 +2,7 @@ import yt_dlp
 import requests
 from bs4 import BeautifulSoup
 import os
+from urllib.parse import quote_plus
 
 class MusicDownloader:
     def __init__(self, output_dir="downloads"):
@@ -16,9 +17,10 @@ class MusicDownloader:
         """
         Searches Genie Music for tracks matching the keyword.
         """
-        search_url = f"https://www.genie.co.kr/search/searchMain?query={keyword}"
+        search_url = f"https://www.genie.co.kr/search/searchMain?query={quote_plus(keyword)}"
         try:
-            resp = requests.get(search_url, headers=self.genie_headers)
+            resp = requests.get(search_url, headers=self.genie_headers, timeout=10)
+            resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
             
             results = []
@@ -34,7 +36,7 @@ class MusicDownloader:
                         "title": title,
                         "artist": artist
                     })
-                except:
+                except Exception:
                     continue
             return results
         except Exception as e:
@@ -47,7 +49,8 @@ class MusicDownloader:
         """
         url = f"https://www.genie.co.kr/detail/songInfo?xgnm={song_id}"
         try:
-            resp = requests.get(url, headers=self.genie_headers)
+            resp = requests.get(url, headers=self.genie_headers, timeout=10)
+            resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
             
             lyric_container = soup.select_one('#pLyrics > p')
